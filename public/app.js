@@ -248,15 +248,33 @@ function onTramiteSelected() {
   tramite.fields.forEach(field => {
     const div = document.createElement('div');
     div.className = 'field-group';
+    
+    let extraAttrs = field === 'curp' ? 'maxlength="18" style="text-transform: uppercase;"' : '';
+    let warning = field === 'curp' ? '<small id="warning-curp" style="color: #e74c3c; display: none; margin-top: 4px; font-weight: 500;"><i class="fas fa-exclamation-triangle"></i> La CURP debe tener exactamente 18 caracteres.</small>' : '';
+    
     div.innerHTML = `
       <label for="field-${field}">${FIELD_LABELS[field] || field}</label>
-      <input type="text" id="field-${field}" placeholder="Ingresa ${FIELD_LABELS[field] || field}" oninput="updatePreview()">
+      <input type="text" id="field-${field}" ${extraAttrs} placeholder="Ingresa ${FIELD_LABELS[field] || field}" oninput="handleFieldInput(this, '${field}')">
+      ${warning}
     `;
     fieldsContainer.appendChild(div);
   });
 
   previewContainer.style.display = 'block';
   sendBtn.style.display = 'flex';
+  updatePreview();
+}
+
+function handleFieldInput(input, fieldName) {
+  if (fieldName === 'curp') {
+    input.value = input.value.toUpperCase();
+    const warning = document.getElementById('warning-curp');
+    if (input.value.length > 0 && input.value.length < 18) {
+      warning.style.display = 'block';
+    } else {
+      warning.style.display = 'none';
+    }
+  }
   updatePreview();
 }
 
