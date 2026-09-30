@@ -49,12 +49,61 @@ const FIELD_LABELS = {
 // ==========================================
 // INIT
 // ==========================================
+const firebaseConfig = {
+  apiKey: "AIzaSyDJjPwtkLnh4i8sUjqy3QQGPmrUwpO7qQg",
+  authDomain: "tramites-centro-de-copiado.firebaseapp.com",
+  projectId: "tramites-centro-de-copiado",
+  storageBucket: "tramites-centro-de-copiado.firebasestorage.app",
+  messagingSenderId: "337454560294",
+  appId: "1:337454560294:web:7762cb109ea766fb42e2e7",
+  measurementId: "G-89204HV51Z"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+const DEFAULT_CONFIG = {
+  shortcuts: [
+    {
+      id: "curp",
+      name: "CURP",
+      url: "https://www.gob.mx/curp/",
+      icon: "id-card",
+      color: "#1a73e8"
+    }
+  ],
+  tramites: [
+    {
+      id: "tramite-curp",
+      name: "Acta de Nacimiento",
+      whatsappProfileId: "perfil-general",
+      messageTemplate: "Buen día, solicitamos el trámite de *Acta de Nacimiento* para el siguiente CURP, por favor:\n\n*CURP:* {curp}\n\nMuchas gracias.",
+      fields: ["curp"]
+    }
+  ],
+  whatsappProfiles: [
+    {
+      id: "perfil-general",
+      name: "Grupo General",
+      phoneNumber: "",
+      members: []
+    }
+  ]
+};
+
 document.addEventListener('DOMContentLoaded', loadConfig);
 
 async function loadConfig() {
   try {
-    const res = await fetch('/api/config');
-    config = await res.json();
+    const docRef = db.collection("settings").doc("config");
+    const docSnap = await docRef.get();
+    
+    if (docSnap.exists) {
+      config = docSnap.data();
+    } else {
+      config = DEFAULT_CONFIG;
+      await docRef.set(config);
+    }
+    
     // Migrate old config format if needed
     migrateConfig();
     renderShortcuts();
@@ -552,20 +601,11 @@ async function saveSettings() {
   }));
 
   try {
-    const res = await fetch('/api/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
-    });
-    const data = await res.json();
-    if (data.success) {
-      showToast('✅ Configuración guardada correctamente');
-      renderShortcuts();
-      populateTramiteSelect();
-      closeSettings();
-    } else {
-      showToast('Error al guardar');
-    }
+    await db.collection("settings").doc("config").set(config);
+    showToast('✅ Configuración guardada correctamente');
+    renderShortcuts();
+    populateTramiteSelect();
+    closeSettings();
   } catch (err) {
     console.error(err);
     showToast('Error al guardar la configuración');
@@ -619,28 +659,19 @@ async function importConfig(event) {
     }
 
     // Save to server
-    const res = await fetch('/api/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(imported),
-    });
-    const data = await res.json();
+    await db.collection("settings").doc("config").set(imported);
 
-    if (data.success) {
-      config = imported;
-      migrateConfig(); // Ensure new format
-      renderShortcuts();
-      populateTramiteSelect();
-      renderSettingsShortcuts();
-      renderSettingsTramites();
-      renderSettingsWhatsAppProfiles();
-      showToast('✅ Configuración importada correctamente');
-    } else {
-      showToast('Error al guardar la configuración importada');
-    }
+    config = imported;
+    migrateConfig(); // Ensure new format
+    renderShortcuts();
+    populateTramiteSelect();
+    renderSettingsShortcuts();
+    renderSettingsTramites();
+    renderSettingsWhatsAppProfiles();
+    showToast('✅ Configuración importada correctamente');
   } catch (err) {
     console.error('Error al importar:', err);
-    showToast('⚠️ Error: el archivo no es un JSON válido');
+    showToast('⚠️ Error: el archivo no es un JSON válido o falló el guardado en la nube');
   }
 }
 

@@ -55,7 +55,7 @@
       "id": "tramite-curp",
       "name": "Acta de Nacimiento",
       "whatsappProfileId": "perfil-general",
-      "messageTemplate": "Buen día, solicitamos el trámite de *Acta de Nacimiento* para el siguiente CURP, por favor:\n\n*CURP:* {curp}\n\nQuedo al pendiente, gracias.",
+      "messageTemplate": "Buen día, solicitamos el trámite de *Acta de Nacimiento* para el siguiente CURP, por favor:\n\n*CURP:* {curp}\n\nMuchas gracias.",
       "fields": [
         "curp"
       ]
