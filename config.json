@@ -1,0 +1,78 @@
+{
+  "shortcuts": [
+    {
+      "id": "curp",
+      "name": "CURP",
+      "url": "https://www.gob.mx/curp/",
+      "icon": "id-card",
+      "color": "#1a73e8"
+    },
+    {
+      "id": "talones-issste",
+      "name": "Talones de Pago ISSSTE",
+      "url": "https://issstenet2.issste.gob.mx/gastp4/ua/r/talones/comp-pago?OutputMap=DUA_HTML5",
+      "icon": "file-invoice-dollar",
+      "color": "#0d9488"
+    },
+    {
+      "id": "ilovepdf-unir",
+      "name": "iLovePDF Unir PDF",
+      "url": "https://www.ilovepdf.com/es/unir_pdf",
+      "icon": "object-group",
+      "color": "#e74c3c"
+    },
+    {
+      "id": "ilovepdf-dividir",
+      "name": "iLovePDF Dividir PDF",
+      "url": "https://www.ilovepdf.com/es/dividir_pdf",
+      "icon": "scissors",
+      "color": "#e67e22"
+    },
+    {
+      "id": "ilovepdf-comprimir",
+      "name": "iLovePDF Comprimir",
+      "url": "https://www.ilovepdf.com/es/comprimir_pdf",
+      "icon": "compress",
+      "color": "#9b59b6"
+    },
+    {
+      "id": "issste-no-derechohabiencia",
+      "name": "ISSSTE No Derechohabiencia",
+      "url": "https://oficinavirtual.issste.gob.mx/Servicios/Acreditaci%C3%B3n-de-no-Afiliaci%C3%B3n",
+      "icon": "hospital",
+      "color": "#16a085"
+    },
+    {
+      "id": "imss-no-derechohabiencia",
+      "name": "IMSS No Derechohabiencia",
+      "url": "https://www.imss.gob.mx/constancia-no-derechohabiencia",
+      "icon": "notes-medical",
+      "color": "#2980b9"
+    }
+  ],
+  "tramites": [
+    {
+      "id": "tramite-curp",
+      "name": "Acta de Nacimiento",
+      "whatsappProfileId": "perfil-general",
+      "messageTemplate": "Buen día, solicitamos el trámite de *Acta de Nacimiento* para el siguiente CURP, por favor:\n\n*CURP:* {curp}\n\nQuedo al pendiente, gracias.",
+      "fields": [
+        "curp"
+      ]
+    }
+  ],
+  "whatsappProfiles": [
+    {
+      "id": "perfil-general",
+      "name": "Grupo General",
+      "phoneNumber": "",
+      "members": []
+    },
+    {
+      "id": "perfil-1790793561269",
+      "name": "Servicios Digitales",
+      "phoneNumber": "",
+      "members": []
+    }
+  ]
+}
