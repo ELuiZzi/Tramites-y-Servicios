@@ -560,6 +560,72 @@ main {
   gap: 8px;
 }
 
+/* Login screen */
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: linear-gradient(135deg, var(--blue-500), var(--blue-800));
+}
+
+.auth-overlay.visible {
+  display: flex;
+}
+
+.auth-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  padding: 36px 32px;
+  width: 100%;
+  max-width: 380px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.auth-logo {
+  font-size: 2.4rem;
+  color: var(--blue-500);
+}
+
+.auth-card h2 {
+  font-size: 1.4rem;
+  color: var(--text-primary);
+}
+
+.auth-card p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.auth-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 22px;
+  border: none;
+  border-radius: var(--radius-xl);
+  background: var(--blue-500);
+  color: white;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.auth-btn:hover {
+  background: var(--blue-700);
+}
+
 /* Tab description */
 .tab-description {
   font-size: 0.85rem;

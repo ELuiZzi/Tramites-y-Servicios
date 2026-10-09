@@ -36,6 +36,9 @@
         <button id="btn-settings" class="settings-btn" onclick="openSettings()" title="Configuración">
           <i class="fas fa-cog"></i>
         </button>
+        <button id="btn-logout" class="settings-btn" onclick="signOut()" title="Cerrar sesión">
+          <i class="fas fa-sign-out-alt"></i>
+        </button>
       </div>
     </div>
   </header>
@@ -193,11 +196,27 @@
     </div>
   </div>
 
+  <!-- Login -->
+  <div id="auth-overlay" class="auth-overlay visible">
+    <div class="auth-card">
+      <i class="fas fa-copy auth-logo"></i>
+      <h2>Copy &amp; Print</h2>
+      <p id="auth-message">Cargando…</p>
+      <button id="btn-login" class="auth-btn" onclick="signIn()" style="display:none;">
+        <i class="fab fa-google"></i> Iniciar sesión con Google
+      </button>
+      <button id="btn-switch-account" class="btn-cancel" onclick="signOut()" style="display:none;">
+        Usar otra cuenta
+      </button>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div id="toast" class="toast"></div>
 
   <!-- Firebase Compat SDKs -->
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore-compat.js"></script>
 
   <script src="app.js"></script>

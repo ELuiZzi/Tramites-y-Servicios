@@ -93,9 +93,49 @@ const DEFAULT_CONFIG = {
   ]
 };
 
-document.addEventListener('DOMContentLoaded', loadConfig);
+// ==========================================
+// AUTH (solo las cuentas permitidas en las reglas de Firestore pueden leer/escribir)
+// ==========================================
+const auth = firebase.auth();
 
-async function loadConfig() {
+function showAuthScreen(message, { login = false, switchAccount = false } = {}) {
+  document.getElementById('auth-message').textContent = message;
+  document.getElementById('btn-login').style.display = login ? 'inline-flex' : 'none';
+  document.getElementById('btn-switch-account').style.display = switchAccount ? 'inline-flex' : 'none';
+  document.getElementById('auth-overlay').classList.add('visible');
+}
+
+function hideAuthScreen() {
+  document.getElementById('auth-overlay').classList.remove('visible');
+}
+
+async function signIn() {
+  try {
+    await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+  } catch (err) {
+    console.error('Error al iniciar sesión:', err);
+    if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+      showAuthScreen(`No se pudo iniciar sesión (${err.code || err.message}).`, { login: true });
+    }
+  }
+}
+
+async function signOut() {
+  await auth.signOut();
+}
+
+auth.onAuthStateChanged(async user => {
+  if (!user) {
+    config = null;
+    showAuthScreen('Inicia sesión para usar la aplicación.', { login: true });
+    return;
+  }
+  document.getElementById('btn-logout').title = `Cerrar sesión (${user.email})`;
+  showAuthScreen('Cargando configuración…');
+  await loadConfig(user);
+});
+
+async function loadConfig(user) {
   try {
     const docRef = db.collection("settings").doc("config");
     const docSnap = await docRef.get();
@@ -111,14 +151,20 @@ async function loadConfig() {
     migrateConfig();
     renderShortcuts();
     populateTramiteSelect();
+    hideAuthScreen();
   } catch (err) {
     console.error('Error cargando configuración:', err);
-    showToast('Error al cargar la configuración');
+    if (err.code === 'permission-denied') {
+      showAuthScreen(`La cuenta ${user.email} no tiene acceso a esta aplicación.`, { switchAccount: true });
+    } else {
+      showAuthScreen('Error al cargar la configuración. Revisa tu conexión y recarga la página.', { switchAccount: true });
+    }
   }
 }
 
 // Migrate old single whatsapp config to profiles
 function migrateConfig() {
+  sanitizeConfig();
   if (config.whatsapp && !config.whatsappProfiles) {
     config.whatsappProfiles = [{
       id: 'perfil-general',
@@ -279,12 +325,43 @@ function getConversation() {
   return config.conversation;
 }
 
+// ==========================================
+// SANITIZING (todo lo que viene de Firestore o de un JSON importado)
+// ==========================================
 function escapeHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Solo enlaces http/https (bloquea "javascript:" y similares)
+function safeUrl(url) {
+  try {
+    const u = new URL(String(url || '').trim());
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function safeColor(color) {
+  return /^#[0-9a-f]{3,8}$/i.test(color || '') ? color : '#5B9BD5';
+}
+
+// Los nombres de campo se usan como id y dentro de onclick: solo letras, números, _ y -
+function safeFieldName(field) {
+  return String(field || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+}
+
+function sanitizeConfig() {
+  config.shortcuts = Array.isArray(config.shortcuts) ? config.shortcuts : [];
+  config.tramites = Array.isArray(config.tramites) ? config.tramites : [];
+  config.tramites.forEach(t => {
+    t.fields = (Array.isArray(t.fields) ? t.fields : []).map(safeFieldName).filter(f => f);
+  });
 }
 
 function guessGender(name) {
@@ -556,19 +633,21 @@ function renderShortcuts() {
 
   config.shortcuts.forEach((s, i) => {
     const iconClass = ICON_MAP[s.icon] || 'fas fa-link';
+    const color = safeColor(s.color);
+    const url = safeUrl(s.url);
     const card = document.createElement('a');
-    card.href = s.url;
+    card.href = url || '#';
     card.target = '_blank';
     card.rel = 'noopener noreferrer';
     card.className = 'shortcut-card';
-    card.style.setProperty('--card-accent', s.color || '#5B9BD5');
+    card.style.setProperty('--card-accent', color);
     card.setAttribute('id', `shortcut-${s.id}`);
     card.innerHTML = `
-      <div class="shortcut-icon" style="background: ${s.color || '#5B9BD5'}">
+      <div class="shortcut-icon" style="background: ${color}">
         <i class="${iconClass}"></i>
       </div>
-      <span class="shortcut-label">${s.name}</span>
-      <span class="shortcut-url">${new URL(s.url).hostname}</span>
+      <span class="shortcut-label">${escapeHtml(s.name)}</span>
+      <span class="shortcut-url">${url ? escapeHtml(new URL(url).hostname) : '⚠️ URL inválida'}</span>
     `;
     // Staggered entry animation
     card.style.animationDelay = `${i * 0.06}s`;
@@ -633,12 +712,13 @@ function onTramiteSelected() {
   tramite.fields.forEach(field => {
     const div = document.createElement('div');
     div.className = 'field-group';
-    
+
     let extraAttrs = field === 'curp' ? 'maxlength="18" style="text-transform: uppercase; transition: border-color 0.3s, box-shadow 0.3s;"' : '';
-    
+    const label = escapeHtml(FIELD_LABELS[field] || field);
+
     div.innerHTML = `
-      <label for="field-${field}">${FIELD_LABELS[field] || field}</label>
-      <input type="text" id="field-${field}" ${extraAttrs} placeholder="Ingresa ${FIELD_LABELS[field] || field}" oninput="handleFieldInput(this, '${field}')">
+      <label for="field-${field}">${label}</label>
+      <input type="text" id="field-${field}" ${extraAttrs} placeholder="Ingresa ${label}" oninput="handleFieldInput(this, '${field}')">
     `;
     fieldsContainer.appendChild(div);
   });
@@ -750,8 +830,8 @@ function renderSettingsShortcuts() {
     card.innerHTML = `
       <div class="config-card-header">
         <span class="config-card-title">
-          <i class="${ICON_MAP[s.icon] || 'fas fa-link'}" style="color:${s.color || '#5B9BD5'}; margin-right:6px;"></i>
-          ${s.name}
+          <i class="${ICON_MAP[s.icon] || 'fas fa-link'}" style="color:${safeColor(s.color)}; margin-right:6px;"></i>
+          ${escapeHtml(s.name)}
         </span>
         <button class="config-card-delete" onclick="deleteShortcut(${i})" title="Eliminar">
           <i class="fas fa-trash-alt"></i>
@@ -760,7 +840,7 @@ function renderSettingsShortcuts() {
       <div class="form-row">
         <div class="form-group">
           <label>Nombre</label>
-          <input type="text" id="sc-name-${i}" value="${s.name}">
+          <input type="text" id="sc-name-${i}" value="${escapeHtml(s.name)}">
         </div>
         <div class="form-group">
           <label>Icono</label>
@@ -771,11 +851,11 @@ function renderSettingsShortcuts() {
       </div>
       <div class="form-group">
         <label>URL</label>
-        <input type="text" id="sc-url-${i}" value="${s.url}">
+        <input type="text" id="sc-url-${i}" value="${escapeHtml(s.url)}">
       </div>
       <div class="form-group">
         <label>Color</label>
-        <input type="color" id="sc-color-${i}" value="${s.color || '#5B9BD5'}" style="height:38px;cursor:pointer;">
+        <input type="color" id="sc-color-${i}" value="${safeColor(s.color)}" style="height:38px;cursor:pointer;">
       </div>
     `;
     list.appendChild(card);
@@ -805,7 +885,7 @@ function renderSettingsTramites() {
 
   // Build profile options for the select
   const profileOptions = (config.whatsappProfiles || [])
-    .map(p => `<option value="${p.id}">${p.name}</option>`)
+    .map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`)
     .join('');
 
   config.tramites.forEach((t, i) => {
@@ -815,7 +895,7 @@ function renderSettingsTramites() {
       <div class="config-card-header">
         <span class="config-card-title">
           <i class="fas fa-file-alt" style="color:var(--blue-500); margin-right:6px;"></i>
-          ${t.name}
+          ${escapeHtml(t.name)}
         </span>
         <button class="config-card-delete" onclick="deleteTramite(${i})" title="Eliminar">
           <i class="fas fa-trash-alt"></i>
@@ -824,7 +904,7 @@ function renderSettingsTramites() {
       <div class="form-row">
         <div class="form-group">
           <label>Nombre del Trámite</label>
-          <input type="text" id="tr-name-${i}" value="${t.name}">
+          <input type="text" id="tr-name-${i}" value="${escapeHtml(t.name)}">
         </div>
         <div class="form-group">
           <label><i class="fab fa-whatsapp" style="color:#25D366;"></i> Perfil WhatsApp</label>
@@ -1005,7 +1085,7 @@ function renderSettingsWhatsAppProfiles() {
       <div class="config-card-header">
         <span class="config-card-title">
           <i class="fab fa-whatsapp" style="color:#25D366; margin-right:6px;"></i>
-          ${p.name}
+          ${escapeHtml(p.name)}
           <span style="font-size:0.72rem; color:var(--text-muted); font-weight:400; margin-left:8px;">
             (${usageCount} trámite${usageCount !== 1 ? 's' : ''})
           </span>
@@ -1016,16 +1096,16 @@ function renderSettingsWhatsAppProfiles() {
       </div>
       <div class="form-group">
         <label>Nombre del Perfil</label>
-        <input type="text" id="wp-name-${i}" value="${p.name}">
+        <input type="text" id="wp-name-${i}" value="${escapeHtml(p.name)}">
       </div>
       <div class="form-group">
         <label>Número de teléfono o ID del grupo</label>
-        <input type="text" id="wp-phone-${i}" value="${p.phoneNumber || ''}" placeholder="Ej: 5215512345678">
+        <input type="text" id="wp-phone-${i}" value="${escapeHtml(p.phoneNumber)}" placeholder="Ej: 5215512345678">
         <small>Incluir código de país sin +. Ej: 521 para México celular</small>
       </div>
       <div class="form-group">
         <label>Miembros del grupo (para etiquetar)</label>
-        <textarea id="wp-members-${i}" rows="3" placeholder="Un número por línea:&#10;5215512345678&#10;5215598765432">${(p.members || []).join('\n')}</textarea>
+        <textarea id="wp-members-${i}" rows="3" placeholder="Un número por línea:&#10;5215512345678&#10;5215598765432">${escapeHtml((p.members || []).join('\n'))}</textarea>
         <small>Estos números serán etiquetados al enviar el mensaje</small>
       </div>
     `;
@@ -1096,7 +1176,7 @@ async function saveSettings() {
     messageTemplate: document.getElementById(`tr-msg-${i}`)?.value || t.messageTemplate,
     fields: (document.getElementById(`tr-fields-${i}`)?.value || '')
       .split(',')
-      .map(f => f.trim())
+      .map(safeFieldName)
       .filter(f => f),
   }));
 
