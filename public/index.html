@@ -72,6 +72,22 @@
           <span>Enviando a: <strong id="profile-badge-name">—</strong></span>
         </div>
 
+        <div id="conversation-badge" class="conversation-badge" style="display:none;">
+          <i id="conversation-stage-icon" class="fas fa-sun"></i>
+          <div class="conversation-badge-text">
+            <strong id="conversation-stage-label">—</strong>
+            <span id="conversation-stage-detail"></span>
+          </div>
+          <div class="conversation-badge-actions">
+            <button class="mini-btn" onclick="shufflePlan()" title="Elegir otras frases">
+              <i class="fas fa-random"></i> Otra variante
+            </button>
+            <button class="mini-btn" onclick="resetConversation()" title="Olvidar el último envío a este perfil (el próximo mensaje llevará saludo)">
+              <i class="fas fa-undo"></i> Reiniciar
+            </button>
+          </div>
+        </div>
+
         <div id="tramite-fields" class="tramite-fields" style="display:none;">
           <!-- Dynamic fields -->
         </div>
@@ -108,6 +124,9 @@
           <button class="tab-btn" onclick="switchSettingsTab('tab-whatsapp', this)">
             <i class="fab fa-whatsapp"></i> Perfiles WhatsApp
           </button>
+          <button class="tab-btn" onclick="switchSettingsTab('tab-conversation', this)">
+            <i class="fas fa-comment-dots"></i> Conversaciones
+          </button>
         </div>
 
         <!-- Tab: Shortcuts Config -->
@@ -140,6 +159,17 @@
           <button class="add-btn" onclick="addWhatsAppProfile()">
             <i class="fas fa-plus"></i> Agregar Perfil de WhatsApp
           </button>
+        </div>
+
+        <!-- Tab: Conversation Engine -->
+        <div id="tab-conversation" class="tab-content">
+          <p class="tab-description">
+            El motor arma cada mensaje con apertura + solicitud + datos + cierre, según el tiempo desde el último envío
+            a ese perfil. El historial de envíos se guarda en este navegador; las frases se guardan en la nube.
+          </p>
+          <div id="conversation-config" class="config-list">
+            <!-- Dynamic -->
+          </div>
         </div>
       </div>
       <div class="modal-footer">

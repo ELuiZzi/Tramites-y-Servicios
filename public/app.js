@@ -76,6 +76,9 @@ const DEFAULT_CONFIG = {
       id: "tramite-curp",
       name: "Acta de Nacimiento",
       whatsappProfileId: "perfil-general",
+      useEngine: true,
+      gender: "f",
+      dataTemplate: "*CURP:* {curp}",
       messageTemplate: "Buen día, solicitamos el trámite de *Acta de Nacimiento* para el siguiente CURP, por favor:\n\n*CURP:* {curp}\n\nMuchas gracias.",
       fields: ["curp"]
     }
@@ -143,11 +146,389 @@ function migrateConfig() {
         : '';
     }
   });
+
+  // Conversation engine settings (fill in anything missing)
+  const defaults = JSON.parse(JSON.stringify(DEFAULT_CONVERSATION));
+  config.conversation = Object.assign(defaults, config.conversation || {});
+  config.conversation.phrases = Object.assign(
+    JSON.parse(JSON.stringify(DEFAULT_CONVERSATION.phrases)),
+    config.conversation.phrases || {}
+  );
+  config.tramites.forEach(t => {
+    if (t.useEngine === undefined) t.useEngine = true;
+    if (!t.gender) t.gender = guessGender(t.name);
+    if (t.dataTemplate === undefined) t.dataTemplate = buildDefaultDataTemplate(t.fields);
+    if (t.messageTemplate === undefined) t.messageTemplate = '';
+  });
 }
 
 // Helper to get a profile by ID
 function getProfile(profileId) {
   return (config.whatsappProfiles || []).find(p => p.id === profileId);
+}
+
+// ==========================================
+// CONVERSATION ENGINE
+// ==========================================
+// Arma cada mensaje en 4 partes: apertura + solicitud + datos + cierre.
+// Qué frases se usan depende del tiempo desde el último envío al mismo
+// perfil de WhatsApp (guardado en el navegador):
+//   - ráfaga  (< burstMinutes):  sin saludo, "te pido otra ..."
+//   - reciente (< recentMinutes): apertura corta
+//   - fría    (>= recentMinutes): saludo (una vez por mañana / tarde)
+
+const CONVERSATION_STATE_KEY = 'cc-conversation-state-v1';
+
+const DEFAULT_CONVERSATION = {
+  burstMinutes: 15,
+  recentMinutes: 30,
+  afternoonHour: 12,
+  phrases: {
+    greetingMorning: [
+      'Buenos días',
+      'Buen día',
+      '¡Buenos días!',
+      'Buenos días, ¿cómo están?',
+    ],
+    greetingAfternoon: [
+      'Buenas tardes',
+      '¡Buenas tardes!',
+      'Buenas tardes, ¿qué tal?',
+      'Buenas tardes, ¿cómo están?',
+    ],
+    openingReturn: [
+      'Hola de nuevo',
+      '¡Hola otra vez!',
+      'Hola, ¿qué tal?',
+      'Qué tal, de nuevo por aquí.',
+    ],
+    openingRecent: [
+      'Hola de nuevo',
+      'Oye',
+      'Disculpa',
+      '-',
+    ],
+    openingBurst: [
+      '-',
+    ],
+    requestNew: [
+      'te solicito el trámite de *{tramite}*, por favor:',
+      '¿me apoyas con el trámite de *{tramite}*? Estos son los datos:',
+      'te encargo el trámite de *{tramite}* con los siguientes datos:',
+      'solicito el trámite de *{tramite}* para los siguientes datos, por favor:',
+    ],
+    requestSame: [
+      'te pido {otro} *{tramite}*, por favor:',
+      '¿me apoyas con {otro} *{tramite}*?',
+      '{otro} *{tramite}*, por favor:',
+      'te encargo {otro} *{tramite}*:',
+    ],
+    requestOther: [
+      'ahora te pido el trámite de *{tramite}*:',
+      'también te encargo el trámite de *{tramite}*, por favor:',
+      '¿me apoyas ahora con el trámite de *{tramite}*?',
+      'te paso uno de *{tramite}*:',
+    ],
+    closingFull: [
+      'Muchas gracias.',
+      '¡Gracias!',
+      'Gracias, quedo al pendiente.',
+      'Mil gracias 🙏',
+    ],
+    closingShort: [
+      'Gracias.',
+      '¡Gracias!',
+      'Gracias 🙏',
+      '-',
+    ],
+    closingBurst: [
+      '-',
+      'Gracias',
+      '🙏',
+    ],
+  },
+};
+
+// Etiquetas y ayuda para el panel de configuración
+const PHRASE_GROUPS = [
+  { key: 'greetingMorning', label: 'Saludo de la mañana', help: 'Primer mensaje antes de la hora de corte. Se usa una sola vez por mañana.' },
+  { key: 'greetingAfternoon', label: 'Saludo de la tarde', help: 'Primer mensaje después de la hora de corte. Se usa una sola vez por tarde.' },
+  { key: 'openingReturn', label: 'Apertura tras una pausa larga', help: 'Pasó más del tiempo "reciente" y ya se saludó en este turno.' },
+  { key: 'openingRecent', label: 'Apertura reciente', help: 'El último mensaje fue hace poco (entre la ráfaga y el tiempo reciente).' },
+  { key: 'openingBurst', label: 'Apertura en ráfaga', help: 'El último mensaje fue hace muy poco. Normalmente sin apertura.' },
+  { key: 'requestNew', label: 'Solicitud (inicio de conversación)', help: 'Primer trámite tras saludar o tras una pausa larga.' },
+  { key: 'requestSame', label: 'Solicitud del mismo trámite', help: 'Se repite el mismo trámite que el mensaje anterior. Ej: "te pido otra Acta de Nacimiento".' },
+  { key: 'requestOther', label: 'Solicitud de un trámite distinto', help: 'El mensaje anterior fue de otro trámite.' },
+  { key: 'closingFull', label: 'Cierre (inicio de conversación)', help: 'Despedida del primer mensaje.' },
+  { key: 'closingShort', label: 'Cierre (reciente)', help: 'Despedida cuando la conversación sigue activa.' },
+  { key: 'closingBurst', label: 'Cierre (ráfaga)', help: 'Despedida en mensajes seguidos. Normalmente nada o algo muy breve.' },
+];
+
+const STAGE_INFO = {
+  burst: { icon: 'fas fa-bolt', label: 'Ráfaga' },
+  recent: { icon: 'fas fa-comments', label: 'Conversación reciente' },
+  cold: { icon: 'fas fa-sun', label: 'Conversación nueva' },
+};
+
+// Plan de frases elegido para el mensaje actual (para que la vista previa
+// y lo que se envía sean idénticos)
+let currentPlan = null;
+let previewTimer = null;
+
+function getConversation() {
+  return config.conversation;
+}
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function guessGender(name) {
+  const first = (name || '').trim().split(/\s+/)[0].toLowerCase();
+  return first.endsWith('a') || first === 'curp' ? 'f' : 'm';
+}
+
+function buildDefaultDataTemplate(fields) {
+  return (fields || []).map(f => `*${FIELD_LABELS[f] || f}:* {${f}}`).join('\n');
+}
+
+// --- Estado local (localStorage) ---
+function loadConversationState() {
+  try {
+    return JSON.parse(localStorage.getItem(CONVERSATION_STATE_KEY)) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveConversationState(state) {
+  try {
+    localStorage.setItem(CONVERSATION_STATE_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.warn('No se pudo guardar el historial de conversación:', e);
+  }
+}
+
+function profileKey(profile) {
+  return profile ? profile.id : '_sin_perfil';
+}
+
+function todayKey(now) {
+  return `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+}
+
+function formatAgo(minutes) {
+  if (minutes < 1) return 'menos de 1 min';
+  if (minutes < 60) return `${Math.floor(minutes)} min`;
+  if (minutes < 24 * 60) {
+    const h = Math.floor(minutes / 60);
+    const m = Math.floor(minutes % 60);
+    return m ? `${h} h ${m} min` : `${h} h`;
+  }
+  return 'más de un día';
+}
+
+// Decide qué tipo de apertura/solicitud/cierre corresponde ahora
+function getConversationContext(tramite, profile, now = new Date()) {
+  const conv = getConversation();
+  const st = loadConversationState()[profileKey(profile)] || {};
+  const minutes = st.lastSentAt ? (now.getTime() - st.lastSentAt) / 60000 : Infinity;
+  const period = now.getHours() < conv.afternoonHour ? 'morning' : 'afternoon';
+  const greeted = !!(st.greeted && st.greeted.date === todayKey(now) && st.greeted[period]);
+  const sameTramite = st.lastTramiteId === tramite.id;
+
+  let stage, opening, request, closing;
+  if (minutes < conv.burstMinutes) {
+    stage = 'burst';
+    opening = 'openingBurst';
+    closing = 'closingBurst';
+  } else if (minutes < conv.recentMinutes) {
+    stage = 'recent';
+    opening = 'openingRecent';
+    closing = 'closingShort';
+  } else {
+    stage = 'cold';
+    opening = greeted ? 'openingReturn' : (period === 'morning' ? 'greetingMorning' : 'greetingAfternoon');
+    closing = 'closingFull';
+  }
+  if (stage === 'cold') {
+    request = 'requestNew';
+  } else {
+    request = sameTramite ? 'requestSame' : 'requestOther';
+  }
+
+  return { stage, period, minutes, greeted, sameTramite, opening, request, closing };
+}
+
+// Elige una frase al azar, evitando repetir la última usada en esa categoría
+function pickVariant(category, avoidIdx) {
+  const list = getConversation().phrases[category] || [];
+  if (list.length === 0) return -1;
+  if (list.length === 1) return 0;
+  let idx;
+  do {
+    idx = Math.floor(Math.random() * list.length);
+  } while (idx === avoidIdx);
+  return idx;
+}
+
+function buildPlan(tramite, profile, avoidCurrent = false) {
+  const ctx = getConversationContext(tramite, profile);
+  const st = loadConversationState()[profileKey(profile)] || {};
+  const lastVariants = st.lastVariants || {};
+  const plan = { tramiteId: tramite.id, profileKey: profileKey(profile), ctx };
+  ['opening', 'request', 'closing'].forEach(part => {
+    const cat = ctx[part];
+    // Al pedir "otra variante" evitamos la que se muestra; si no, la última enviada
+    const avoid = avoidCurrent && currentPlan && currentPlan[part].cat === cat
+      ? currentPlan[part].idx
+      : lastVariants[cat];
+    plan[part] = { cat, idx: pickVariant(cat, avoid) };
+  });
+  return plan;
+}
+
+function planIsStale(plan, tramite, profile) {
+  if (!plan || plan.tramiteId !== tramite.id || plan.profileKey !== profileKey(profile)) return true;
+  const ctx = getConversationContext(tramite, profile);
+  return ['opening', 'request', 'closing'].some(part => plan[part].cat !== ctx[part]);
+}
+
+function getPhrase(sel, tramite) {
+  const list = getConversation().phrases[sel.cat] || [];
+  let text = (list[sel.idx] ?? '').trim();
+  if (text === '-') return '';
+  const otro = tramite.gender === 'm' ? 'otro' : 'otra';
+  return text.split('{tramite}').join(tramite.name).split('{otro}').join(otro);
+}
+
+// Cambia mayúscula/minúscula de la primera letra, saltando ¿ ¡ * _
+function setFirstLetterCase(str, upper) {
+  const m = str.match(/^([¿¡*_\s]*)(.)([\s\S]*)$/);
+  if (!m) return str;
+  return m[1] + (upper ? m[2].toUpperCase() : m[2].toLowerCase()) + m[3];
+}
+
+function fillFields(template, tramite, usePlaceholders) {
+  let msg = template || '';
+  tramite.fields.forEach(field => {
+    const input = document.getElementById(`field-${field}`);
+    const val = input ? input.value.trim() : '';
+    const fallback = usePlaceholders ? `[${FIELD_LABELS[field] || field}]` : '';
+    msg = msg.split(`{${field}}`).join(val || fallback);
+  });
+  return msg;
+}
+
+function composeMessage(tramite, profile, usePlaceholders) {
+  let msg;
+  if (tramite.useEngine === false) {
+    msg = fillFields(tramite.messageTemplate, tramite, usePlaceholders);
+  } else {
+    const opening = getPhrase(currentPlan.opening, tramite);
+    const request = getPhrase(currentPlan.request, tramite);
+    const closing = getPhrase(currentPlan.closing, tramite);
+
+    let firstLine;
+    if (opening && request) {
+      firstLine = /[.!?…]$/.test(opening)
+        ? `${opening} ${setFirstLetterCase(request, true)}`
+        : `${opening}, ${setFirstLetterCase(request, false)}`;
+    } else {
+      firstLine = setFirstLetterCase(opening || request, true);
+    }
+
+    const data = fillFields(tramite.dataTemplate, tramite, usePlaceholders).trim();
+    msg = [firstLine, data, closing].filter(Boolean).join('\n\n');
+  }
+
+  // Add member tags from the assigned profile
+  if (profile && profile.members && profile.members.length > 0) {
+    const tags = profile.members
+      .filter(m => m.trim())
+      .map(m => `@${m.trim()}`)
+      .join(' ');
+    if (tags) {
+      msg = tags + '\n\n' + msg;
+    }
+  }
+  return msg;
+}
+
+function recordMessageSent(tramite, profile) {
+  const now = new Date();
+  const state = loadConversationState();
+  const key = profileKey(profile);
+  const st = state[key] || {};
+  const ctx = currentPlan.ctx;
+
+  st.lastSentAt = now.getTime();
+  st.lastTramiteId = tramite.id;
+  st.lastVariants = st.lastVariants || {};
+  ['opening', 'request', 'closing'].forEach(part => {
+    st.lastVariants[currentPlan[part].cat] = currentPlan[part].idx;
+  });
+  // El "buenos días / buenas tardes" se usa una sola vez por turno
+  if (currentPlan.opening.cat.startsWith('greeting')) {
+    const today = todayKey(now);
+    if (!st.greeted || st.greeted.date !== today) st.greeted = { date: today };
+    st.greeted[ctx.period] = true;
+  }
+
+  state[key] = st;
+  saveConversationState(state);
+}
+
+function renderConversationBadge(tramite, profile) {
+  const badge = document.getElementById('conversation-badge');
+  if (tramite.useEngine === false) {
+    badge.style.display = 'none';
+    return;
+  }
+  const ctx = currentPlan.ctx;
+  const info = STAGE_INFO[ctx.stage];
+  let detail;
+  if (ctx.minutes === Infinity) {
+    detail = 'Primer mensaje a este perfil · con saludo';
+  } else if (ctx.stage === 'cold') {
+    detail = `Último envío hace ${formatAgo(ctx.minutes)} · `
+      + (ctx.greeted ? 'ya se saludó en este turno' : 'con saludo');
+  } else {
+    detail = `Último envío hace ${formatAgo(ctx.minutes)} · `
+      + (ctx.sameTramite ? 'mismo trámite' : 'trámite distinto');
+  }
+  document.getElementById('conversation-stage-icon').className = info.icon;
+  document.getElementById('conversation-stage-label').textContent = info.label;
+  document.getElementById('conversation-stage-detail').textContent = detail;
+  badge.style.display = 'flex';
+}
+
+function getSelectedTramite() {
+  const tramiteId = document.getElementById('tramite-select').value;
+  return config.tramites.find(t => t.id === tramiteId);
+}
+
+function shufflePlan() {
+  const tramite = getSelectedTramite();
+  if (!tramite) return;
+  currentPlan = buildPlan(tramite, getProfile(tramite.whatsappProfileId), true);
+  updatePreview();
+}
+
+function resetConversation() {
+  const tramite = getSelectedTramite();
+  if (!tramite) return;
+  const profile = getProfile(tramite.whatsappProfileId);
+  const state = loadConversationState();
+  delete state[profileKey(profile)];
+  saveConversationState(state);
+  currentPlan = null;
+  updatePreview();
+  showToast(`Conversación reiniciada para ${profile ? profile.name : 'sin perfil'}`);
 }
 
 // ==========================================
@@ -220,11 +601,15 @@ function onTramiteSelected() {
   const sendBtn = document.getElementById('btn-send-whatsapp');
   const profileBadge = document.getElementById('tramite-profile-badge');
 
+  currentPlan = null;
+  clearInterval(previewTimer);
+
   if (!tramiteId) {
     fieldsContainer.style.display = 'none';
     previewContainer.style.display = 'none';
     sendBtn.style.display = 'none';
     profileBadge.style.display = 'none';
+    document.getElementById('conversation-badge').style.display = 'none';
     return;
   }
 
@@ -261,6 +646,8 @@ function onTramiteSelected() {
   previewContainer.style.display = 'block';
   sendBtn.style.display = 'flex';
   updatePreview();
+  // Mantiene al día el "hace X min" y la etapa mientras la pantalla está abierta
+  previewTimer = setInterval(updatePreview, 30000);
 }
 
 function handleFieldInput(input, fieldName) {
@@ -282,61 +669,29 @@ function handleFieldInput(input, fieldName) {
 }
 
 function updatePreview() {
-  const sel = document.getElementById('tramite-select');
-  const tramiteId = sel.value;
-  const tramite = config.tramites.find(t => t.id === tramiteId);
+  const tramite = getSelectedTramite();
   if (!tramite) return;
-
-  let msg = tramite.messageTemplate;
-
-  tramite.fields.forEach(field => {
-    const input = document.getElementById(`field-${field}`);
-    const val = input ? input.value : '';
-    msg = msg.replace(`{${field}}`, val || `[${FIELD_LABELS[field] || field}]`);
-  });
-
-  // Add member tags from the assigned profile
   const profile = getProfile(tramite.whatsappProfileId);
-  if (profile && profile.members && profile.members.length > 0) {
-    const tags = profile.members
-      .filter(m => m.trim())
-      .map(m => `@${m.trim()}`)
-      .join(' ');
-    if (tags) {
-      msg = tags + '\n\n' + msg;
-    }
-  }
 
-  document.getElementById('preview-content').textContent = msg;
+  // Si cambió la etapa (p. ej. pasó la ráfaga), elegimos frases nuevas
+  if (planIsStale(currentPlan, tramite, profile)) {
+    currentPlan = buildPlan(tramite, profile);
+  }
+  renderConversationBadge(tramite, profile);
+  document.getElementById('preview-content').textContent = composeMessage(tramite, profile, true);
 }
 
 function sendWhatsApp() {
-  const sel = document.getElementById('tramite-select');
-  const tramiteId = sel.value;
-  const tramite = config.tramites.find(t => t.id === tramiteId);
+  const tramite = getSelectedTramite();
   if (!tramite) return;
 
   // Get the assigned profile
   const profile = getProfile(tramite.whatsappProfileId);
 
-  let msg = tramite.messageTemplate;
-
-  tramite.fields.forEach(field => {
-    const input = document.getElementById(`field-${field}`);
-    const val = input ? input.value : '';
-    msg = msg.replace(`{${field}}`, val || '');
-  });
-
-  // Add member tags from the assigned profile
-  if (profile && profile.members && profile.members.length > 0) {
-    const tags = profile.members
-      .filter(m => m.trim())
-      .map(m => `@${m.trim()}`)
-      .join(' ');
-    if (tags) {
-      msg = tags + '\n\n' + msg;
-    }
+  if (planIsStale(currentPlan, tramite, profile)) {
+    currentPlan = buildPlan(tramite, profile);
   }
+  const msg = composeMessage(tramite, profile, false);
 
   const encoded = encodeURIComponent(msg);
   const phone = profile ? (profile.phoneNumber || '') : '';
@@ -349,6 +704,11 @@ function sendWhatsApp() {
   }
 
   window.open(waUrl, '_blank');
+  if (tramite.useEngine !== false) {
+    recordMessageSent(tramite, profile);
+  }
+  currentPlan = null;
+  updatePreview();
   showToast(`Abriendo WhatsApp → ${profile ? profile.name : 'sin perfil'}...`);
 }
 
@@ -360,6 +720,7 @@ function openSettings() {
     renderSettingsShortcuts();
     renderSettingsTramites();
     renderSettingsWhatsAppProfiles();
+    renderSettingsConversation();
   } catch (err) {
     console.error('Error rendering settings:', err);
   } finally {
@@ -475,13 +836,34 @@ function renderSettingsTramites() {
       </div>
       <div class="form-group">
         <label>Campos (separados por coma)</label>
-        <input type="text" id="tr-fields-${i}" value="${t.fields.join(', ')}">
+        <input type="text" id="tr-fields-${i}" value="${escapeHtml(t.fields.join(', '))}">
         <small>Campos disponibles: nombre, curp, telefono, correo, nss, rfc, direccion</small>
       </div>
-      <div class="form-group">
-        <label>Plantilla del Mensaje</label>
-        <textarea id="tr-msg-${i}" rows="6">${t.messageTemplate}</textarea>
-        <small>Usa {nombre}, {curp}, {telefono}, etc. como variables</small>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="tr-engine-${i}" ${t.useEngine !== false ? 'checked' : ''} onchange="toggleTramiteEngine(${i})">
+            Usar motor de conversación
+          </label>
+          <small>Varía saludo, solicitud y cierre según el tiempo desde el último mensaje</small>
+        </div>
+        <div class="form-group">
+          <label>Género del trámite</label>
+          <select id="tr-gender-${i}">
+            <option value="f" ${t.gender !== 'm' ? 'selected' : ''}>Femenino (otra acta, otra CURP)</option>
+            <option value="m" ${t.gender === 'm' ? 'selected' : ''}>Masculino (otro RFC, otro certificado)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group" id="tr-data-group-${i}" style="${t.useEngine === false ? 'display:none;' : ''}">
+        <label>Bloque de datos</label>
+        <textarea id="tr-data-${i}" rows="3">${escapeHtml(t.dataTemplate)}</textarea>
+        <small>Solo los datos del cliente. El saludo, la solicitud y el cierre los arma el motor (pestaña Conversaciones). Usa {nombre}, {curp}, etc.</small>
+      </div>
+      <div class="form-group" id="tr-msg-group-${i}" style="${t.useEngine !== false ? 'display:none;' : ''}">
+        <label>Plantilla fija del mensaje</label>
+        <textarea id="tr-msg-${i}" rows="6">${escapeHtml(t.messageTemplate)}</textarea>
+        <small>Mensaje completo, siempre igual. Usa {nombre}, {curp}, {telefono}, etc. como variables</small>
       </div>
     `;
     list.appendChild(card);
@@ -494,6 +876,97 @@ function renderSettingsTramites() {
   });
 }
 
+function toggleTramiteEngine(i) {
+  const on = document.getElementById(`tr-engine-${i}`).checked;
+  document.getElementById(`tr-data-group-${i}`).style.display = on ? '' : 'none';
+  document.getElementById(`tr-msg-group-${i}`).style.display = on ? 'none' : '';
+}
+
+// --- Conversation Engine Config ---
+function renderSettingsConversation() {
+  const conv = getConversation();
+  const container = document.getElementById('conversation-config');
+
+  const groups = PHRASE_GROUPS.map(g => `
+    <div class="form-group">
+      <label for="cv-${g.key}">${g.label}</label>
+      <textarea id="cv-${g.key}" rows="4">${escapeHtml((conv.phrases[g.key] || []).join('\n'))}</textarea>
+      <small>${g.help}</small>
+    </div>
+  `).join('');
+
+  container.innerHTML = `
+    <div class="config-card">
+      <div class="config-card-header">
+        <span class="config-card-title"><i class="fas fa-clock" style="color:var(--blue-500); margin-right:6px;"></i> Tiempos</span>
+      </div>
+      <div class="form-row form-row-3">
+        <div class="form-group">
+          <label for="cv-burst">Ráfaga (min)</label>
+          <input type="number" id="cv-burst" min="1" value="${conv.burstMinutes}">
+          <small>Menos de esto: sin saludo, "te pido otra…"</small>
+        </div>
+        <div class="form-group">
+          <label for="cv-recent">Reciente (min)</label>
+          <input type="number" id="cv-recent" min="1" value="${conv.recentMinutes}">
+          <small>Más de esto: se inicia de nuevo la conversación</small>
+        </div>
+        <div class="form-group">
+          <label for="cv-afternoon">Hora de "buenas tardes"</label>
+          <input type="number" id="cv-afternoon" min="0" max="23" value="${conv.afternoonHour}">
+          <small>Antes: buenos días · Después: buenas tardes</small>
+        </div>
+      </div>
+    </div>
+    <div class="config-card">
+      <div class="config-card-header">
+        <span class="config-card-title"><i class="fas fa-comment-dots" style="color:var(--whatsapp); margin-right:6px;"></i> Frases</span>
+      </div>
+      <p class="tab-description">
+        Una frase por línea; se elige una al azar sin repetir la anterior.
+        Escribe <strong>-</strong> en una línea para "sin texto".
+        Variables: <strong>{tramite}</strong> (nombre del trámite) y <strong>{otro}</strong> ("otra" u "otro" según el género del trámite).
+        Si la apertura termina en coma o sin signo, la solicitud continúa en la misma oración; si termina en . ! ?, empieza una nueva.
+      </p>
+      ${groups}
+    </div>
+    <div class="conversation-config-actions">
+      <button class="btn-cancel" onclick="restoreDefaultPhrases()"><i class="fas fa-undo"></i> Restaurar frases predeterminadas</button>
+      <button class="btn-cancel" onclick="clearConversationHistory()"><i class="fas fa-eraser"></i> Borrar historial de envíos de este navegador</button>
+    </div>
+  `;
+}
+
+function restoreDefaultPhrases() {
+  if (!confirm('¿Reemplazar todas las frases y tiempos por los predeterminados? (Se aplica al guardar)')) return;
+  config.conversation = JSON.parse(JSON.stringify(DEFAULT_CONVERSATION));
+  renderSettingsConversation();
+}
+
+function clearConversationHistory() {
+  saveConversationState({});
+  currentPlan = null;
+  updatePreview();
+  showToast('Historial de envíos borrado: el próximo mensaje empezará con saludo');
+}
+
+function collectConversationSettings() {
+  const conv = getConversation();
+  const num = (id, fallback) => {
+    const v = parseInt(document.getElementById(id)?.value, 10);
+    return Number.isFinite(v) && v >= 0 ? v : fallback;
+  };
+  conv.burstMinutes = num('cv-burst', conv.burstMinutes);
+  conv.recentMinutes = Math.max(num('cv-recent', conv.recentMinutes), conv.burstMinutes);
+  conv.afternoonHour = Math.min(num('cv-afternoon', conv.afternoonHour), 23);
+  PHRASE_GROUPS.forEach(g => {
+    const el = document.getElementById(`cv-${g.key}`);
+    if (!el) return;
+    const lines = el.value.split('\n').map(l => l.trim()).filter(l => l);
+    conv.phrases[g.key] = lines.length ? lines : ['-'];
+  });
+}
+
 function addTramite() {
   const defaultProfileId = config.whatsappProfiles.length > 0
     ? config.whatsappProfiles[0].id
@@ -502,6 +975,9 @@ function addTramite() {
     id: 'tramite-' + Date.now(),
     name: 'Nuevo Trámite',
     whatsappProfileId: defaultProfileId,
+    useEngine: true,
+    gender: 'm',
+    dataTemplate: '*Nombre:* {nombre}\n*CURP:* {curp}',
     messageTemplate: 'Buen día, solicito el trámite de *Nuevo Trámite* para:\n\n*Nombre:* {nombre}\n*CURP:* {curp}\n\nGracias.',
     fields: ['nombre', 'curp'],
   });
@@ -614,6 +1090,9 @@ async function saveSettings() {
     id: t.id,
     name: document.getElementById(`tr-name-${i}`)?.value || t.name,
     whatsappProfileId: document.getElementById(`tr-profile-${i}`)?.value || '',
+    useEngine: document.getElementById(`tr-engine-${i}`)?.checked ?? t.useEngine,
+    gender: document.getElementById(`tr-gender-${i}`)?.value || t.gender,
+    dataTemplate: document.getElementById(`tr-data-${i}`)?.value ?? t.dataTemplate,
     messageTemplate: document.getElementById(`tr-msg-${i}`)?.value || t.messageTemplate,
     fields: (document.getElementById(`tr-fields-${i}`)?.value || '')
       .split(',')
@@ -621,11 +1100,18 @@ async function saveSettings() {
       .filter(f => f),
   }));
 
+  collectConversationSettings();
+
   try {
     await db.collection("settings").doc("config").set(config);
     showToast('✅ Configuración guardada correctamente');
     renderShortcuts();
+    const selectedId = document.getElementById('tramite-select').value;
     populateTramiteSelect();
+    if (config.tramites.some(t => t.id === selectedId)) {
+      document.getElementById('tramite-select').value = selectedId;
+    }
+    onTramiteSelected();
     closeSettings();
   } catch (err) {
     console.error(err);
@@ -689,6 +1175,7 @@ async function importConfig(event) {
     renderSettingsShortcuts();
     renderSettingsTramites();
     renderSettingsWhatsAppProfiles();
+    renderSettingsConversation();
     showToast('✅ Configuración importada correctamente');
   } catch (err) {
     console.error('Error al importar:', err);
