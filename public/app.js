@@ -93,76 +93,9 @@ const DEFAULT_CONFIG = {
   ]
 };
 
-// ==========================================
-// AUTH (usuario y contraseña de Firebase; solo los usuarios permitidos en
-// las reglas de Firestore pueden leer/escribir)
-// ==========================================
-const auth = firebase.auth();
+document.addEventListener('DOMContentLoaded', loadConfig);
 
-// Los usuarios se crean en Firebase con un correo; si se escribe solo
-// "mostrador", se completa con este dominio (no necesita existir).
-const LOGIN_DOMAIN = 'copyprint.app';
-
-const AUTH_ERRORS = {
-  'auth/invalid-credential': 'Usuario o contraseña incorrectos.',
-  'auth/invalid-login-credentials': 'Usuario o contraseña incorrectos.',
-  'auth/wrong-password': 'Usuario o contraseña incorrectos.',
-  'auth/user-not-found': 'Usuario o contraseña incorrectos.',
-  'auth/invalid-email': 'El usuario no es válido.',
-  'auth/user-disabled': 'Este usuario está desactivado.',
-  'auth/too-many-requests': 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.',
-  'auth/network-request-failed': 'Sin conexión a internet.',
-};
-
-function showAuthScreen(message, { login = false, switchAccount = false } = {}) {
-  document.getElementById('auth-message').textContent = message;
-  document.getElementById('login-form').style.display = login ? 'flex' : 'none';
-  document.getElementById('btn-switch-account').style.display = switchAccount ? 'inline-flex' : 'none';
-  document.getElementById('auth-overlay').classList.add('visible');
-}
-
-function hideAuthScreen() {
-  document.getElementById('auth-overlay').classList.remove('visible');
-}
-
-function loginEmail(user) {
-  user = user.trim().toLowerCase();
-  return user.includes('@') ? user : `${user}@${LOGIN_DOMAIN}`;
-}
-
-async function signIn(event) {
-  event.preventDefault();
-  const btn = document.getElementById('btn-login');
-  const user = document.getElementById('login-user').value;
-  const password = document.getElementById('login-password').value;
-  btn.disabled = true;
-  try {
-    await auth.signInWithEmailAndPassword(loginEmail(user), password);
-    document.getElementById('login-password').value = '';
-  } catch (err) {
-    console.error('Error al iniciar sesión:', err);
-    showAuthScreen(AUTH_ERRORS[err.code] || `No se pudo iniciar sesión (${err.code || err.message}).`, { login: true });
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function signOut() {
-  await auth.signOut();
-}
-
-auth.onAuthStateChanged(async user => {
-  if (!user) {
-    config = null;
-    showAuthScreen('Inicia sesión para usar la aplicación.', { login: true });
-    return;
-  }
-  document.getElementById('btn-logout').title = `Cerrar sesión (${user.email.replace('@' + LOGIN_DOMAIN, '')})`;
-  showAuthScreen('Cargando configuración…');
-  await loadConfig(user);
-});
-
-async function loadConfig(user) {
+async function loadConfig() {
   try {
     const docRef = db.collection("settings").doc("config");
     const docSnap = await docRef.get();
@@ -178,14 +111,9 @@ async function loadConfig(user) {
     migrateConfig();
     renderShortcuts();
     populateTramiteSelect();
-    hideAuthScreen();
   } catch (err) {
     console.error('Error cargando configuración:', err);
-    if (err.code === 'permission-denied') {
-      showAuthScreen(`El usuario ${user.email.replace('@' + LOGIN_DOMAIN, '')} no tiene acceso a esta aplicación.`, { switchAccount: true });
-    } else {
-      showAuthScreen('Error al cargar la configuración. Revisa tu conexión y recarga la página.', { switchAccount: true });
-    }
+    showToast('Error al cargar la configuración');
   }
 }
 
@@ -740,12 +668,13 @@ function onTramiteSelected() {
     const div = document.createElement('div');
     div.className = 'field-group';
 
-    let extraAttrs = field === 'curp' ? 'maxlength="18" style="text-transform: uppercase; transition: border-color 0.3s, box-shadow 0.3s;"' : '';
+    let extraAttrs = field === 'curp' ? 'maxlength="18" autocomplete="off" spellcheck="false" style="text-transform: uppercase;"' : '';
     const label = escapeHtml(FIELD_LABELS[field] || field);
 
     div.innerHTML = `
       <label for="field-${field}">${label}</label>
       <input type="text" id="field-${field}" ${extraAttrs} placeholder="Ingresa ${label}" oninput="handleFieldInput(this, '${field}')">
+      <small class="field-hint" id="hint-${field}"></small>
     `;
     fieldsContainer.appendChild(div);
   });
@@ -757,22 +686,119 @@ function onTramiteSelected() {
   previewTimer = setInterval(updatePreview, 30000);
 }
 
+// ==========================================
+// VALIDACIÓN DE CAMPOS
+// ==========================================
+const CURP_STATES = ['AS', 'BC', 'BS', 'CC', 'CL', 'CM', 'CS', 'CH', 'DF', 'DG', 'GT', 'GR', 'HG', 'JC', 'MC',
+  'MN', 'MS', 'NT', 'NL', 'OC', 'PL', 'QT', 'QR', 'SP', 'SL', 'SR', 'TC', 'TS', 'TL', 'VZ', 'YN', 'ZS', 'NE'];
+
+// status: empty | partial | invalid | warning | valid
+function validateCurp(curp) {
+  if (!curp) return { status: 'empty', message: '' };
+  if (curp.length < 18) {
+    const left = 18 - curp.length;
+    return { status: 'partial', message: left === 1 ? 'Falta 1 carácter' : `Faltan ${left} caracteres` };
+  }
+  if (!/^[A-Z]{4}$/.test(curp.slice(0, 4))) {
+    return { status: 'invalid', message: 'Los primeros 4 caracteres deben ser letras' };
+  }
+  if (!/^\d{6}$/.test(curp.slice(4, 10))) {
+    return { status: 'invalid', message: 'Los caracteres 5 al 10 deben ser la fecha de nacimiento (AAMMDD)' };
+  }
+  const yy = +curp.slice(4, 6), mm = +curp.slice(6, 8), dd = +curp.slice(8, 10);
+  // El carácter 17 es dígito para nacidos antes del 2000 y letra a partir del 2000
+  const year = (/\d/.test(curp[16]) ? 1900 : 2000) + yy;
+  const date = new Date(year, mm - 1, dd);
+  if (date.getFullYear() !== year || date.getMonth() !== mm - 1 || date.getDate() !== dd) {
+    return { status: 'invalid', message: `La fecha de nacimiento no existe (${curp.slice(8, 10)}/${curp.slice(6, 8)}/${year})` };
+  }
+  if (date > new Date()) {
+    return { status: 'invalid', message: 'La fecha de nacimiento está en el futuro' };
+  }
+  if (!/^[HMX]$/.test(curp[10])) {
+    return { status: 'invalid', message: 'El carácter 11 debe ser H, M o X (sexo)' };
+  }
+  if (!CURP_STATES.includes(curp.slice(11, 13))) {
+    return { status: 'invalid', message: `"${curp.slice(11, 13)}" no es un estado válido (caracteres 12 y 13)` };
+  }
+  if (!/^[B-DF-HJ-NP-TV-Z]{3}$/.test(curp.slice(13, 16))) {
+    return { status: 'invalid', message: 'Los caracteres 14 al 16 deben ser consonantes' };
+  }
+  if (!/^[A-Z\d]$/.test(curp[16]) || !/^\d$/.test(curp[17])) {
+    return { status: 'invalid', message: 'Los últimos 2 caracteres no son válidos' };
+  }
+  // Dígito verificador (RENAPO)
+  const dict = '0123456789ABCDEFGHIJKLMNÑOPQRSTUVWXYZ';
+  let sum = 0;
+  for (let i = 0; i < 17; i++) sum += dict.indexOf(curp[i]) * (18 - i);
+  const check = (10 - (sum % 10)) % 10;
+  if (check !== +curp[17]) {
+    return { status: 'warning', message: 'El dígito verificador no coincide: revisa que esté bien escrita' };
+  }
+  const sexo = { H: 'Hombre', M: 'Mujer', X: 'No binario' }[curp[10]];
+  return { status: 'valid', message: `Válida · ${sexo} · ${curp.slice(8, 10)}/${curp.slice(6, 8)}/${year}` };
+}
+
+function validateField(field, value) {
+  if (field === 'curp') return validateCurp(value);
+  return value ? { status: 'valid', message: '' } : { status: 'empty', message: '' };
+}
+
+function setFieldState(field, result) {
+  const input = document.getElementById(`field-${field}`);
+  const hint = document.getElementById(`hint-${field}`);
+  if (!input) return;
+  input.classList.remove('is-valid', 'is-partial', 'is-warning', 'is-invalid');
+  if (result.status !== 'empty') input.classList.add(`is-${result.status}`);
+  if (hint) {
+    hint.textContent = result.message;
+    hint.className = `field-hint${result.status !== 'empty' ? ' hint-' + result.status : ''}`;
+  }
+}
+
 function handleFieldInput(input, fieldName) {
   if (fieldName === 'curp') {
-    input.value = input.value.toUpperCase();
-    
-    if (input.value.length === 0) {
-      input.style.borderColor = '';
-      input.style.boxShadow = '';
-    } else if (input.value.length < 18) {
-      input.style.borderColor = '#f39c12';
-      input.style.boxShadow = '0 0 0 2px rgba(243, 156, 18, 0.2)';
-    } else if (input.value.length === 18) {
-      input.style.borderColor = '#2ecc71';
-      input.style.boxShadow = '0 0 0 2px rgba(46, 204, 113, 0.2)';
-    }
+    // Mayúsculas y sin espacios ni guiones (por si se pega de otro lado)
+    input.value = input.value.toUpperCase().replace(/[^A-Z0-9Ñ]/g, '').slice(0, 18);
   }
+  setFieldState(fieldName, validateField(fieldName, input.value.trim()));
   updatePreview();
+}
+
+// Revisa todos los campos antes de enviar. Devuelve true si se puede enviar.
+function checkFieldsBeforeSend(tramite) {
+  const warnings = [];
+  for (const field of tramite.fields) {
+    const input = document.getElementById(`field-${field}`);
+    const result = validateField(field, input ? input.value.trim() : '');
+    const label = FIELD_LABELS[field] || field;
+    if (result.status === 'empty') {
+      setFieldState(field, { status: 'invalid', message: 'Este dato es obligatorio' });
+      input?.focus();
+      showToast(`⚠️ Falta llenar: ${label}`);
+      return false;
+    }
+    if (result.status === 'partial' || result.status === 'invalid') {
+      setFieldState(field, { status: 'invalid', message: result.message });
+      input?.focus();
+      showToast(`⚠️ ${label}: ${result.message}`);
+      return false;
+    }
+    if (result.status === 'warning') warnings.push(`${label}: ${result.message}`);
+  }
+  if (warnings.length) {
+    return confirm(`${warnings.join('\n')}\n\n¿Enviar de todos modos?`);
+  }
+  return true;
+}
+
+function clearTramiteFields(tramite) {
+  tramite.fields.forEach(field => {
+    const input = document.getElementById(`field-${field}`);
+    if (input) input.value = '';
+    setFieldState(field, { status: 'empty', message: '' });
+  });
+  document.getElementById(`field-${tramite.fields[0]}`)?.focus();
 }
 
 function updatePreview() {
@@ -791,6 +817,8 @@ function updatePreview() {
 function sendWhatsApp() {
   const tramite = getSelectedTramite();
   if (!tramite) return;
+
+  if (!checkFieldsBeforeSend(tramite)) return;
 
   // Get the assigned profile
   const profile = getProfile(tramite.whatsappProfileId);
@@ -814,6 +842,8 @@ function sendWhatsApp() {
   if (tramite.useEngine !== false) {
     recordMessageSent(tramite, profile);
   }
+  // Listo para el siguiente cliente
+  clearTramiteFields(tramite);
   currentPlan = null;
   updatePreview();
   showToast(`Abriendo WhatsApp → ${profile ? profile.name : 'sin perfil'}...`);

@@ -36,9 +36,6 @@
         <button id="btn-settings" class="settings-btn" onclick="openSettings()" title="Configuración">
           <i class="fas fa-cog"></i>
         </button>
-        <button id="btn-logout" class="settings-btn" onclick="signOut()" title="Cerrar sesión">
-          <i class="fas fa-sign-out-alt"></i>
-        </button>
       </div>
     </div>
   </header>
@@ -196,31 +193,11 @@
     </div>
   </div>
 
-  <!-- Login -->
-  <div id="auth-overlay" class="auth-overlay visible">
-    <div class="auth-card">
-      <i class="fas fa-copy auth-logo"></i>
-      <h2>Copy &amp; Print</h2>
-      <p id="auth-message">Cargando…</p>
-      <form id="login-form" class="auth-form" onsubmit="signIn(event)" style="display:none;">
-        <input type="text" id="login-user" placeholder="Usuario" autocomplete="username" autocapitalize="none" required>
-        <input type="password" id="login-password" placeholder="Contraseña" autocomplete="current-password" required>
-        <button type="submit" id="btn-login" class="auth-btn">
-          <i class="fas fa-sign-in-alt"></i> Entrar
-        </button>
-      </form>
-      <button id="btn-switch-account" class="btn-cancel" onclick="signOut()" style="display:none;">
-        Usar otro usuario
-      </button>
-    </div>
-  </div>
-
   <!-- Toast -->
   <div id="toast" class="toast"></div>
 
   <!-- Firebase Compat SDKs -->
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore-compat.js"></script>
 
   <script src="app.js"></script>
