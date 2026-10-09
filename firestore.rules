@@ -2,15 +2,15 @@ rules_version = '2';
 
 // Reglas de Firestore para Copy & Print.
 // Pégalas en: Firebase Console → Firestore Database → Reglas → Publicar.
-// Reemplaza TU_CORREO@gmail.com por la(s) cuenta(s) de Google que pueden usar la app.
+// Reemplaza UID_DEL_USUARIO por el "UID de usuario" que aparece en
+// Firebase Console → Authentication → Usuarios (uno por cada usuario permitido).
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function isAllowedUser() {
       return request.auth != null
-        && request.auth.token.email_verified == true
-        && request.auth.token.email in [
-          'TU_CORREO@gmail.com'
+        && request.auth.uid in [
+          'UID_DEL_USUARIO'
         ];
     }
 

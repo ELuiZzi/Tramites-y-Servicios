@@ -94,13 +94,29 @@ const DEFAULT_CONFIG = {
 };
 
 // ==========================================
-// AUTH (solo las cuentas permitidas en las reglas de Firestore pueden leer/escribir)
+// AUTH (usuario y contraseña de Firebase; solo los usuarios permitidos en
+// las reglas de Firestore pueden leer/escribir)
 // ==========================================
 const auth = firebase.auth();
 
+// Los usuarios se crean en Firebase con un correo; si se escribe solo
+// "mostrador", se completa con este dominio (no necesita existir).
+const LOGIN_DOMAIN = 'copyprint.app';
+
+const AUTH_ERRORS = {
+  'auth/invalid-credential': 'Usuario o contraseña incorrectos.',
+  'auth/invalid-login-credentials': 'Usuario o contraseña incorrectos.',
+  'auth/wrong-password': 'Usuario o contraseña incorrectos.',
+  'auth/user-not-found': 'Usuario o contraseña incorrectos.',
+  'auth/invalid-email': 'El usuario no es válido.',
+  'auth/user-disabled': 'Este usuario está desactivado.',
+  'auth/too-many-requests': 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.',
+  'auth/network-request-failed': 'Sin conexión a internet.',
+};
+
 function showAuthScreen(message, { login = false, switchAccount = false } = {}) {
   document.getElementById('auth-message').textContent = message;
-  document.getElementById('btn-login').style.display = login ? 'inline-flex' : 'none';
+  document.getElementById('login-form').style.display = login ? 'flex' : 'none';
   document.getElementById('btn-switch-account').style.display = switchAccount ? 'inline-flex' : 'none';
   document.getElementById('auth-overlay').classList.add('visible');
 }
@@ -109,14 +125,25 @@ function hideAuthScreen() {
   document.getElementById('auth-overlay').classList.remove('visible');
 }
 
-async function signIn() {
+function loginEmail(user) {
+  user = user.trim().toLowerCase();
+  return user.includes('@') ? user : `${user}@${LOGIN_DOMAIN}`;
+}
+
+async function signIn(event) {
+  event.preventDefault();
+  const btn = document.getElementById('btn-login');
+  const user = document.getElementById('login-user').value;
+  const password = document.getElementById('login-password').value;
+  btn.disabled = true;
   try {
-    await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+    await auth.signInWithEmailAndPassword(loginEmail(user), password);
+    document.getElementById('login-password').value = '';
   } catch (err) {
     console.error('Error al iniciar sesión:', err);
-    if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
-      showAuthScreen(`No se pudo iniciar sesión (${err.code || err.message}).`, { login: true });
-    }
+    showAuthScreen(AUTH_ERRORS[err.code] || `No se pudo iniciar sesión (${err.code || err.message}).`, { login: true });
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -130,7 +157,7 @@ auth.onAuthStateChanged(async user => {
     showAuthScreen('Inicia sesión para usar la aplicación.', { login: true });
     return;
   }
-  document.getElementById('btn-logout').title = `Cerrar sesión (${user.email})`;
+  document.getElementById('btn-logout').title = `Cerrar sesión (${user.email.replace('@' + LOGIN_DOMAIN, '')})`;
   showAuthScreen('Cargando configuración…');
   await loadConfig(user);
 });
@@ -155,7 +182,7 @@ async function loadConfig(user) {
   } catch (err) {
     console.error('Error cargando configuración:', err);
     if (err.code === 'permission-denied') {
-      showAuthScreen(`La cuenta ${user.email} no tiene acceso a esta aplicación.`, { switchAccount: true });
+      showAuthScreen(`El usuario ${user.email.replace('@' + LOGIN_DOMAIN, '')} no tiene acceso a esta aplicación.`, { switchAccount: true });
     } else {
       showAuthScreen('Error al cargar la configuración. Revisa tu conexión y recarga la página.', { switchAccount: true });
     }

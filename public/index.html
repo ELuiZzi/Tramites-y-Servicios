@@ -202,11 +202,15 @@
       <i class="fas fa-copy auth-logo"></i>
       <h2>Copy &amp; Print</h2>
       <p id="auth-message">Cargando…</p>
-      <button id="btn-login" class="auth-btn" onclick="signIn()" style="display:none;">
-        <i class="fab fa-google"></i> Iniciar sesión con Google
-      </button>
+      <form id="login-form" class="auth-form" onsubmit="signIn(event)" style="display:none;">
+        <input type="text" id="login-user" placeholder="Usuario" autocomplete="username" autocapitalize="none" required>
+        <input type="password" id="login-password" placeholder="Contraseña" autocomplete="current-password" required>
+        <button type="submit" id="btn-login" class="auth-btn">
+          <i class="fas fa-sign-in-alt"></i> Entrar
+        </button>
+      </form>
       <button id="btn-switch-account" class="btn-cancel" onclick="signOut()" style="display:none;">
-        Usar otra cuenta
+        Usar otro usuario
       </button>
     </div>
   </div>

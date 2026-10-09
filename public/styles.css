@@ -606,6 +606,39 @@ main {
   line-height: 1.5;
 }
 
+.auth-form {
+  width: 100%;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-form input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1.5px solid rgba(90, 90, 120, 0.2);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  background: var(--bg-card);
+}
+
+.auth-form input:focus {
+  outline: none;
+  border-color: var(--blue-400);
+  box-shadow: 0 0 0 3px rgba(91,155,213,0.15);
+}
+
+.auth-form .auth-btn {
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.auth-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .auth-btn {
   display: inline-flex;
   align-items: center;
